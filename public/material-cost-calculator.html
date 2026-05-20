@@ -180,6 +180,24 @@
   /* qty input inline */
   .qty-input { width: 80px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 4px; font-size: 13px; text-align: right; }
 
+  /* ===== QTY MODAL (ฟอร์มกรอกปริมาณ) ===== */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(10,31,60,0.55); display: flex; align-items: center; justify-content: center; z-index: 500; padding: 16px; }
+  .modal-box { background: white; border-radius: 12px; width: 100%; max-width: 540px; max-height: 88vh; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,0.35); }
+  .modal-header { background: var(--navy); color: white; padding: 13px 18px; border-radius: 12px 12px 0 0; display: flex; align-items: center; gap: 10px; }
+  .modal-header .mh-title { flex: 1; font-weight: 600; font-size: 15px; line-height: 1.4; }
+  .modal-close { background: none; border: none; color: #cbd5e1; font-size: 20px; cursor: pointer; line-height: 1; padding: 0 4px; }
+  .modal-close:hover { color: white; }
+  .modal-body { padding: 16px 18px; overflow-y: auto; }
+  .modal-footer { padding: 12px 18px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 8px; }
+  .qm-field { margin-bottom: 12px; }
+  .qm-field > label { display: block; font-size: 13px; color: var(--text); margin-bottom: 4px; font-weight: 600; }
+  .qm-field .qm-hint { color: var(--muted); font-weight: 400; font-size: 12px; }
+  .qm-field.qm-work > label { color: var(--navy); }
+  .qm-field.qm-work input { border-color: var(--gold); background: #fffdf6; font-weight: 600; }
+  .qm-optional { color: #b45309; font-weight: 600; font-size: 12px; }
+  .qm-section-hint { font-size: 12px; color: var(--muted); margin: 14px 0 10px; border-top: 1px dashed var(--border); padding-top: 10px; }
+  .qm-field.qm-labor input { background: #fef9ee; }
+
   /* Price table */
   .price-grp-hdr td { background: var(--navy2); color: var(--gold); padding: 5px 12px; font-size: 12px; font-weight: 600; }
   .price-row td { padding: 6px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
@@ -485,6 +503,21 @@
 
 <!-- ===== PRINT REPORT WRAP (hidden, shown only when printing) ===== -->
 <div id="print-report-wrap"></div>
+
+<!-- ===== QTY MODAL (ฟอร์มกรอกปริมาณงาน/วัสดุ) ===== -->
+<div id="qty-modal" class="modal-overlay hidden" onclick="if(event.target===this)qtyModalCancel()">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span class="mh-title" id="qm-title"></span>
+      <button class="modal-close" onclick="qtyModalCancel()" title="ปิด">&times;</button>
+    </div>
+    <div class="modal-body" id="qm-body"></div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="qtyModalCancel()">ยกเลิก</button>
+      <button class="btn btn-primary" onclick="qtyModalSave()">✓ บันทึกรายการ</button>
+    </div>
+  </div>
+</div>
 
 <!-- ============================================================ -->
 <!-- DATA: materialData inline -->
@@ -3516,54 +3549,69 @@ function selectItem(secId, itemId) {
   const sec = MATERIAL_SECTIONS.find(s => s.id === secId);
   const item = sec.items.find(i => i.id === itemId);
   if (!item) return;
-
-  if (!selectedItems[itemId]) {
-    selectedItems[itemId] = { secId, item, qty: 1, userInputs: {}, result: calcItem(item, 1, {}) };
-  }
   showItemQtyDialog(secId, item);
 }
 
+// state ของ modal กรอกปริมาณที่กำลังเปิดอยู่
+let pendingQty = null;
+
+// แสดงฟอร์ม modal สำหรับกรอกปริมาณงาน + ปริมาณวัสดุที่ต้องกรอกเอง
 function showItemQtyDialog(secId, item) {
   const sec = MATERIAL_SECTIONS.find(s => s.id === secId);
   const existing = selectedItems[item.id];
-  const currentQty = existing ? existing.qty : 1;
+  pendingQty = { secId, item, isNew: !existing };
 
-  // ปริมาณงานหลัก
-  const qtyStr = window.prompt(
-    `กำหนดปริมาณงาน "${item.label}"\n\n` +
-    `หน่วย: ${sec.unit || 'บาท/ตร.ม.'}\n` +
-    `ปริมาณงาน:`, currentQty
-  );
-  if (qtyStr === null) {
-    // Cancel → deselect if new
-    if (!existing || existing.result == null) delete selectedItems[item.id];
-    return;
-  }
-  const qty = parseFloat(qtyStr);
-  if (isNaN(qty) || qty <= 0) {
-    alert('กรุณากรอกปริมาณที่มากกว่า 0');
-    return;
-  }
-
-  // ปริมาณส่วนผสม/รายการที่ต้องกรอกเอง (หมวด 13/14/15)
-  const manualFields = getManualFields(item);
-  const userInputs = (existing && existing.userInputs) ? { ...existing.userInputs } : {};
   const unitLabel = sec.unit ? sec.unit.replace('บาท/','') : 'หน่วย';
-  for (const f of manualFields) {
-    const prev = (userInputs[f.key] != null) ? userInputs[f.key] : '';
-    const ans = window.prompt(
-      `ปริมาณ "${f.label}"` +
-      (f.note ? ` (${f.note})` : '') +
-      (f.optional ? '\n[ถ้าไม่มี ให้ใส่ 0 หรือเว้นว่าง]' : '') +
-      `\nหน่วย: ${f.unit} — ต่อ 1 ${unitLabel}`,
-      prev
-    );
-    if (ans === null) { userInputs[f.key] = userInputs[f.key] || 0; continue; }
-    const v = parseFloat(ans);
-    userInputs[f.key] = (isNaN(v) || v < 0) ? 0 : v;
+  const manualFields = getManualFields(item);
+  const ui = (existing && existing.userInputs) || {};
+
+  let html = `<div class="qm-field qm-work">
+    <label>ปริมาณงาน <span class="qm-hint">(หน่วย: ${escapeHtml(sec.unit || 'บาท/ตร.ม.')})</span></label>
+    <input type="number" id="qm-qty" min="0" step="any" placeholder="กรอกปริมาณงาน"
+      value="${existing ? existing.qty : ''}">
+  </div>`;
+
+  if (manualFields.length) {
+    html += `<div class="qm-section-hint">📋 กรอกปริมาณวัสดุ/ค่าแรง <strong>ต่อ 1 ${escapeHtml(unitLabel)}</strong> — รายการที่ระบุ [ถ้ามี] หากไม่ใช้ให้ใส่ 0 หรือเว้นว่าง</div>`;
+    manualFields.forEach(f => {
+      const isLabor = /^(ค่าแรง|ค่าติดตั้ง|ค่าวาง)/.test(f.label);
+      html += `<div class="qm-field ${isLabor ? 'qm-labor' : ''}">
+        <label>${escapeHtml(f.label)} ${f.optional ? '<span class="qm-optional">[ถ้ามี]</span>' : ''}
+          <span class="qm-hint">— ${escapeHtml(f.unit)}${f.note ? ' · ' + escapeHtml(f.note) : ''}</span></label>
+        <input type="number" class="qm-manual" data-fkey="${escapeHtml(f.key)}" min="0" step="any"
+          placeholder="0" value="${ui[f.key] != null ? ui[f.key] : ''}">
+      </div>`;
+    });
   }
 
+  document.getElementById('qm-title').textContent = item.id + '  ' + item.label;
+  document.getElementById('qm-body').innerHTML = html;
+  document.getElementById('qty-modal').classList.remove('hidden');
+  setTimeout(() => { const q = document.getElementById('qm-qty'); if (q) { q.focus(); q.select(); } }, 50);
+}
+
+function qtyModalCancel() {
+  pendingQty = null;
+  document.getElementById('qty-modal').classList.add('hidden');
+}
+
+function qtyModalSave() {
+  if (!pendingQty) return;
+  const { secId, item } = pendingQty;
+  const qty = parseFloat(document.getElementById('qm-qty').value);
+  if (isNaN(qty) || qty <= 0) {
+    alert('กรุณากรอกปริมาณงานที่มากกว่า 0');
+    document.getElementById('qm-qty').focus();
+    return;
+  }
+  const userInputs = {};
+  document.querySelectorAll('#qm-body .qm-manual').forEach(inp => {
+    const v = parseFloat(inp.value);
+    userInputs[inp.dataset.fkey] = (isNaN(v) || v < 0) ? 0 : v;
+  });
   selectedItems[item.id] = { secId, item, qty, userInputs, result: calcItem(item, qty, userInputs) };
+  pendingQty = null;
+  document.getElementById('qty-modal').classList.add('hidden');
 
   updateSelectedCount();
   renderResults();
@@ -4499,8 +4547,14 @@ function fmtN(n) {
   return Number(n).toLocaleString('th-TH', { maximumFractionDigits: 4 });
 }
 
-// Enter key on login
+// คีย์ลัด: modal กรอกปริมาณ (Enter=บันทึก, Esc=ยกเลิก) / Enter บนหน้า login
 document.addEventListener('keydown', e => {
+  const modal = document.getElementById('qty-modal');
+  if (modal && !modal.classList.contains('hidden')) {
+    if (e.key === 'Escape') { e.preventDefault(); qtyModalCancel(); }
+    else if (e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); qtyModalSave(); }
+    return;
+  }
   if (e.key === 'Enter' && document.getElementById('login-page') && !document.getElementById('login-page').classList.contains('hidden')) {
     doLogin();
   }
